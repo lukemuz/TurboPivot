@@ -5588,6 +5588,7 @@ name = "turbopivot"
 version = "0.1.0"
 dependencies = [
  "polars",
+ "polars-ops",
  "serde",
  "serde_json",
  "tauri",

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
+use polars_ops::pivot::{pivot, PivotAgg};
 
 #[derive(Error, Debug)]
 pub enum DataError {
@@ -284,10 +285,8 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
     let mut group_cols = request.rows.clone();
     group_cols.extend(request.columns.clone());
     
-    // Create groupby expressions
+    // Create groupby expressions and aggregation expressions
     let group_exprs: Vec<Expr> = group_cols.iter().map(|s| col(s)).collect();
-    
-    // Create aggregation expressions
     let agg_exprs: Vec<Expr> = request.values
         .iter()
         .map(|val_with_agg| {
@@ -324,68 +323,204 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
         })
         .collect();
     
-    // Execute the query to get the result DataFrame
-    let result_df = lf
+    // Execute the query to get the initial aggregated DataFrame
+    let agg_df = lf
         .group_by(group_exprs)
         .agg(agg_exprs)
         .collect()
         .map_err(|e| DataError::ProcessingError(e.to_string()))?;
     
-    // Generate column headers for the result
-    let mut column_headers = Vec::new();
+    println!("Aggregated DataFrame: {:?}", agg_df);
     
-    // Add value fields with aggregation as headers
-    let value_headers = request.values.iter()
-        .map(|v| format!("{}_{}", 
-            match v.aggregation {
+    // Transform the data using the actual pivot functionality
+    if request.columns.is_empty() {
+        // No need to pivot if there are no column fields
+        let data = df_to_json_rows(agg_df).map_err(|e| DataError::ProcessingError(e.to_string()))?;
+        
+        let value_headers = request.values.iter()
+            .map(|v| format!("{}_{}", 
+                match v.aggregation {
+                    AggregationType::Sum => "sum",
+                    AggregationType::Mean => "mean",
+                    AggregationType::Count => "count",
+                    AggregationType::Min => "min",
+                    AggregationType::Max => "max",
+                    AggregationType::First => "first", 
+                    AggregationType::Last => "last",
+                    AggregationType::Median => "median",
+                    AggregationType::Std => "std",
+                    AggregationType::Var => "var",
+                }, 
+                v.field
+            ))
+            .collect::<Vec<String>>();
+        
+        Ok(PivotResult {
+            data,
+            column_headers: vec![value_headers],
+            row_headers: request.rows,
+        })
+    } else {
+        // We need to pivot the DataFrame
+        let val_with_agg = &request.values[0]; // Using just the first value for simplicity
+        let agg_col_name = format!(
+            "{}_{}",
+            match val_with_agg.aggregation {
                 AggregationType::Sum => "sum",
                 AggregationType::Mean => "mean",
                 AggregationType::Count => "count",
                 AggregationType::Min => "min",
                 AggregationType::Max => "max",
-                AggregationType::First => "first", 
+                AggregationType::First => "first",
                 AggregationType::Last => "last",
                 AggregationType::Median => "median",
                 AggregationType::Std => "std",
                 AggregationType::Var => "var",
-            }, 
-            v.field
-        ))
-        .collect();
-    column_headers.push(value_headers);
-    
-    // Convert to serde_json format for the frontend
-    let data = df_to_json_rows(result_df)
-        .map_err(|e| DataError::ProcessingError(e.to_string()))?;
-    
-    Ok(PivotResult {
-        data,
-        column_headers,
-        row_headers: request.rows,
-    })
-}
-
-fn extract_column_values(df: &DataFrame, columns: &[String]) -> Result<Vec<String>, DataError> {
-    if columns.is_empty() {
-        return Ok(Vec::new());
+            },
+            val_with_agg.field
+        );
+        
+        // Map our aggregation type to PivotAgg
+        let pivot_agg = match val_with_agg.aggregation {
+            AggregationType::Sum => PivotAgg::Sum,
+            AggregationType::Mean => PivotAgg::Mean,
+            AggregationType::Count => PivotAgg::Count,
+            AggregationType::Min => PivotAgg::Min,
+            AggregationType::Max => PivotAgg::Max,
+            AggregationType::First => PivotAgg::First,
+            AggregationType::Last => PivotAgg::Last,
+            AggregationType::Median => PivotAgg::Median,
+            // For Std and Var, use First since they don't have direct equivalents
+            AggregationType::Std => PivotAgg::First,
+            AggregationType::Var => PivotAgg::First,
+        };
+        
+        // REVERSED pivot parameters:
+        let pivoted = pivot(
+            &agg_df,
+            // Use columns (processing methods) as the index instead of rows
+            request.columns.iter().map(|s| s.as_str()).collect::<Vec<&str>>(), 
+            // Use rows (countries) as the columns instead of columns
+            Some(request.rows.iter().map(|s| s.as_str()).collect::<Vec<&str>>()), 
+            Some(vec![agg_col_name.as_str()]), // values
+            false, // maintain_order
+            Some(pivot_agg),
+            None,  // separator
+        )
+        .map_err(|e| DataError::ProcessingError(format!("Pivot error: {}", e)))?;
+        
+        println!("Pivoted DataFrame: {:?}", pivoted);
+        
+        // Extract column headers from the pivoted DataFrame
+        let all_columns = pivoted.get_column_names();
+        println!("All columns: {:?}", all_columns);
+        
+        // We know the row identifier column(s) from the request
+        let row_columns = request.rows.clone();
+        
+        // The remaining columns in the pivoted dataframe are the "value" columns
+        // These will typically be combinations of the column values
+        let value_columns: Vec<String> = all_columns.iter()
+            .filter(|&name| !row_columns.contains(&name.to_string()))
+            .map(|s| s.to_string())
+            .collect();
+        
+        println!("Row columns: {:?}", row_columns);
+        println!("Value columns: {:?}", value_columns);
+        
+        // Create column headers structure for frontend
+        let column_headers = vec![value_columns.clone()];
+        
+        // Now we need to convert the pivoted DataFrame to rows
+        let mut data = Vec::new();
+        
+        // Each row in the DataFrame represents one entry by row values
+        for i in 0..pivoted.height() {
+            let mut row_map = HashMap::new();
+            
+            // First, add the row identifier columns
+            for row_col in &row_columns {
+                if let Ok(col) = pivoted.column(row_col) {
+                    let value = match col.get(i) {
+                        Ok(AnyValue::String(s)) => serde_json::Value::String(s.to_string()),
+                        Ok(AnyValue::Int32(v)) => serde_json::Value::Number(serde_json::Number::from(v)),
+                        Ok(AnyValue::Int64(v)) => {
+                            if v > i64::pow(2, 53) || v < -i64::pow(2, 53) {
+                                serde_json::Value::String(v.to_string())
+                            } else {
+                                serde_json::Value::Number(serde_json::Number::from_f64(v as f64).unwrap())
+                            }
+                        },
+                        Ok(AnyValue::Float64(v)) => {
+                            if let Some(num) = serde_json::Number::from_f64(v) {
+                                serde_json::Value::Number(num)
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        },
+                        _ => serde_json::Value::String(format!("{:?}", col.get(i))),
+                    };
+                    
+                    row_map.insert(row_col.clone(), value);
+                }
+            }
+            
+            // Then, add all value columns
+            for value_col in &value_columns {
+                if let Ok(col) = pivoted.column(value_col) {
+                    let value = match col.get(i) {
+                        Ok(AnyValue::Float64(v)) => {
+                            if let Some(num) = serde_json::Number::from_f64(v) {
+                                serde_json::Value::Number(num)
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        },
+                        Ok(AnyValue::Int32(v)) => serde_json::Value::Number(serde_json::Number::from(v)),
+                        Ok(AnyValue::Int64(v)) => {
+                            if v > i64::pow(2, 53) || v < -i64::pow(2, 53) {
+                                serde_json::Value::String(v.to_string())
+                            } else {
+                                serde_json::Value::Number(serde_json::Number::from_f64(v as f64).unwrap())
+                            }
+                        },
+                        Ok(AnyValue::Null) => serde_json::Value::Null,
+                        _ => serde_json::Value::String(format!("{:?}", col.get(i))),
+                    };
+                    
+                    // Use the aggregation type from the request to form the key prefix
+                    let agg_prefix = match &request.values[0].aggregation {
+                        AggregationType::Sum => "sum",
+                        AggregationType::Mean => "mean",
+                        AggregationType::Count => "count",
+                        AggregationType::Min => "min",
+                        AggregationType::Max => "max",
+                        AggregationType::First => "first",
+                        AggregationType::Last => "last",
+                        AggregationType::Median => "median",
+                        AggregationType::Std => "std",
+                        AggregationType::Var => "var",
+                    };
+                    
+                    // When we have column features, the frontend is still expecting the
+                    // aggregation prefix in the key
+                    let key = format!("{}_{}", agg_prefix, value_col);
+                    row_map.insert(key, value);
+                }
+            }
+            
+            data.push(row_map);
+        }
+        
+        println!("Final data (rows: {}): {:?}", data.len(), data);
+        
+        // Correct structure for frontend
+        Ok(PivotResult {
+            data,
+            column_headers,
+            row_headers: request.rows,
+        })
     }
-
-    // Handle only the first column dimension for now (can be extended for multi-level)
-    let col_name = &columns[0];
-    let unique_series = df.column(col_name)
-        .map_err(|e| DataError::ProcessingError(e.to_string()))?
-        .unique()
-        .map_err(|e| DataError::ProcessingError(e.to_string()))?;
-    
-    let unique_strings = unique_series.cast(&DataType::String)
-        .map_err(|e| DataError::ProcessingError(e.to_string()))?
-        .str()
-        .map_err(|e| DataError::ProcessingError(e.to_string()))?
-        .into_iter()
-        .filter_map(|opt_str| opt_str.map(|s| s.to_string()))
-        .collect();
-    
-    Ok(unique_strings)
 }
 
 fn df_to_json_rows(df: DataFrame) -> Result<Vec<HashMap<String, serde_json::Value>>, polars::error::PolarsError> {
@@ -421,7 +556,7 @@ fn df_to_json_rows(df: DataFrame) -> Result<Vec<HashMap<String, serde_json::Valu
                 DataType::Float32 | DataType::Float64 => {
                     let s = col.f64()?;
                     if let Some(v) = s.get(i) {
-                        if let Some(num) = serde_json::Number::from_f64(v) {
+                        if let Some(num) = serde_json::Number::from_f64(v as f64) {
                             serde_json::Value::Number(num)
                         } else {
                             serde_json::Value::String(v.to_string())
