@@ -1,0 +1,68 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "turbopivot",
+  "version": "0.1.0",
+  "identifier": "com.turbopivot.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "plugins": {
+    "dialog": null,
+    "fs": null
+  },
+  "app": {
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "main-capability",
+          "description": "Capability for the main window",
+          "windows": ["*"],
+          "permissions": [
+            "core:path:default", 
+            "core:event:default", 
+            "core:window:default",
+            "core:app:default",
+            "core:resources:default",
+            "core:menu:default",
+            "core:tray:default"
+          ]
+        },
+        {
+          "identifier": "fs-capability",
+          "description": "File system capability",
+          "windows": ["*"],
+          "permissions": [
+            "fs:default",
+            "fs:allow-read-file",
+            "fs:allow-write-file",
+            "fs:allow-read-dir",
+            "dialog:allow-open",
+            "dialog:allow-save"
+          ]
+        }
+      ]
+    },
+    "windows": [
+      {
+        "title": "turbopivot",
+        "width": 800,
+        "height": 600,
+        "label": "main"
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

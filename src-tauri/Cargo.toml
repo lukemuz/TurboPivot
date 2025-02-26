@@ -1,0 +1,43 @@
+[package]
+name = "turbopivot"
+version = "0.1.0"
+description = "Lightning fast pivot tables"
+authors = ["Lucas Muzynoski"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2" 
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+polars = { version = "0.41.0", features = [
+    "simd",
+    "lazy",
+    "temporal",
+    "describe",
+    "json",
+    "parquet",
+    "dtype-datetime",
+    "dtype-struct",
+    "strings",
+    "random",
+    "object",
+    "fmt",
+    "performant"
+] }
+thiserror = "2.0.11"
+
+
+
+[features]
+# This makes the application work with sidecar files
+# https://tauri.app/guides/core/v2/config/build-options/
+custom-protocol = ["tauri/custom-protocol"]
+
