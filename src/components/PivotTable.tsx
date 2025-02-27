@@ -14,14 +14,14 @@ export default function PivotTable({ result, isLoading }: PivotTableProps) {
     return <div className="empty-state">Configure and run a pivot to see results here</div>;
   }
 
-  // Get unique values for row headers
-  const rowValues = result.data.map(row => {
-    const rowKey: Record<string, any> = {};
-    result.row_headers.forEach(header => {
-      rowKey[header] = row[header];
-    });
-    return rowKey;
-  });
+  // // Get unique values for row headers
+  // const rowValues = result.data.map(row => {
+  //   const rowKey: Record<string, any> = {};
+  //   result.row_headers.forEach(header => {
+  //     rowKey[header] = row[header];
+  //   });
+  //   return rowKey;
+  // });
 
   // Helper to generate a unique key for each row
   const getRowKey = (row: Record<string, any>) => {
@@ -47,7 +47,7 @@ export default function PivotTable({ result, isLoading }: PivotTableProps) {
           )}
         </thead>
         <tbody>
-          {result.data.map((row, rowIndex) => (
+          {result.data.map((row, _rowIndex) => (
             <tr key={getRowKey(row)}>
               {/* Row headers */}
               {result.row_headers.map(header => (

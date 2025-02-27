@@ -31,11 +31,22 @@ polars = { version = "0.41.0", features = [
     "object",
     "fmt",
     "performant",
-    "pivot"
+    "pivot",
+    "nightly",
 ] }
+
 thiserror = "2.0.11"
 polars-ops = { version = "0.41.0", features = ["pivot"] }
 
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+strip = true
+
+[profile.release.package."*"]
+opt-level = 3
 
 
 [features]
