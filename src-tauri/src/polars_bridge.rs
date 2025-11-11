@@ -746,4 +746,349 @@ fn df_to_json_rows(df: DataFrame) -> Result<Vec<HashMap<String, serde_json::Valu
     }
     
     Ok(result)
-} 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    // Helper function to create test CSV file
+    fn create_test_csv() -> String {
+        let test_data = "Country,Product,Sales,Quantity\nUSA,Widget,1000,10\nUSA,Gadget,2000,20\nCanada,Widget,1500,15\nCanada,Gadget,2500,25\n";
+        let test_file = "/tmp/test_data.csv";
+        fs::write(test_file, test_data).unwrap();
+        test_file.to_string()
+    }
+
+    // Helper function to create test CSV with nulls
+    fn create_test_csv_with_nulls() -> String {
+        let test_data = "Country,Product,Sales,Quantity\nUSA,Widget,1000,10\nUSA,Gadget,,20\nCanada,Widget,1500,\nCanada,Gadget,2500,25\n";
+        let test_file = "/tmp/test_data_nulls.csv";
+        fs::write(test_file, test_data).unwrap();
+        test_file.to_string()
+    }
+
+    #[test]
+    fn test_read_csv_data() {
+        let file_path = create_test_csv();
+        let result = read_data(&file_path);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_column_names() {
+        let file_path = create_test_csv();
+        let result = get_column_names(&file_path);
+        assert!(result.is_ok());
+        let columns = result.unwrap();
+        assert_eq!(columns, vec!["Country", "Product", "Sales", "Quantity"]);
+    }
+
+    #[test]
+    fn test_validate_pivot_request_no_rows_or_columns() {
+        let request = PivotRequest {
+            data_path: "test.csv".to_string(),
+            rows: vec![],
+            columns: vec![],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: None,
+        };
+        let result = validate_pivot_request(&request);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("At least one row or column"));
+    }
+
+    #[test]
+    fn test_validate_pivot_request_no_values() {
+        let request = PivotRequest {
+            data_path: "test.csv".to_string(),
+            rows: vec!["Country".to_string()],
+            columns: vec![],
+            values: vec![],
+            filters: None,
+        };
+        let result = validate_pivot_request(&request);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("At least one value field"));
+    }
+
+    #[test]
+    fn test_validate_pivot_request_duplicate_fields() {
+        let request = PivotRequest {
+            data_path: "test.csv".to_string(),
+            rows: vec!["Country".to_string()],
+            columns: vec!["Country".to_string()],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: None,
+        };
+        let result = validate_pivot_request(&request);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Duplicate field"));
+    }
+
+    #[test]
+    fn test_validate_pivot_request_valid() {
+        let request = PivotRequest {
+            data_path: "test.csv".to_string(),
+            rows: vec!["Country".to_string()],
+            columns: vec![],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: None,
+        };
+        let result = validate_pivot_request(&request);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_columns_exist_invalid_row() {
+        let request = PivotRequest {
+            data_path: "test.csv".to_string(),
+            rows: vec!["InvalidColumn".to_string()],
+            columns: vec![],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: None,
+        };
+        let available = vec!["Country".to_string(), "Sales".to_string()];
+        let result = validate_columns_exist(&request, &available);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("InvalidColumn"));
+    }
+
+    #[test]
+    fn test_validate_columns_exist_invalid_value() {
+        let request = PivotRequest {
+            data_path: "test.csv".to_string(),
+            rows: vec!["Country".to_string()],
+            columns: vec![],
+            values: vec![ValueWithAggregation {
+                field: "InvalidValue".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: None,
+        };
+        let available = vec!["Country".to_string(), "Sales".to_string()];
+        let result = validate_columns_exist(&request, &available);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("InvalidValue"));
+    }
+
+    #[test]
+    fn test_validate_columns_exist_valid() {
+        let request = PivotRequest {
+            data_path: "test.csv".to_string(),
+            rows: vec!["Country".to_string()],
+            columns: vec![],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: None,
+        };
+        let available = vec!["Country".to_string(), "Sales".to_string()];
+        let result = validate_columns_exist(&request, &available);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_simple_pivot_rows_only() {
+        let file_path = create_test_csv();
+        let request = PivotRequest {
+            data_path: file_path.clone(),
+            rows: vec!["Country".to_string()],
+            columns: vec![],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: None,
+        };
+        let result = generate_pivot(request);
+        assert!(result.is_ok());
+        let pivot_result = result.unwrap();
+
+        // Should have 2 rows (USA, Canada)
+        assert_eq!(pivot_result.data.len(), 2);
+
+        // Check that we have row headers
+        assert_eq!(pivot_result.row_headers, vec!["Country"]);
+
+        // Check that we have column headers for the aggregation
+        assert_eq!(pivot_result.column_headers.len(), 1);
+        assert!(pivot_result.column_headers[0].contains(&"sum_Sales".to_string()));
+    }
+
+    #[test]
+    fn test_simple_pivot_with_columns() {
+        let file_path = create_test_csv();
+        let request = PivotRequest {
+            data_path: file_path.clone(),
+            rows: vec!["Country".to_string()],
+            columns: vec!["Product".to_string()],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: None,
+        };
+        let result = generate_pivot(request);
+        assert!(result.is_ok());
+        let pivot_result = result.unwrap();
+
+        // Should have 2 rows (USA, Canada)
+        assert_eq!(pivot_result.data.len(), 2);
+
+        // Check row headers
+        assert_eq!(pivot_result.row_headers, vec!["Country"]);
+
+        // Should have column headers for each product
+        assert!(pivot_result.column_headers[0].len() > 0);
+    }
+
+    #[test]
+    fn test_multi_value_pivot() {
+        let file_path = create_test_csv();
+        let request = PivotRequest {
+            data_path: file_path.clone(),
+            rows: vec!["Country".to_string()],
+            columns: vec!["Product".to_string()],
+            values: vec![
+                ValueWithAggregation {
+                    field: "Sales".to_string(),
+                    aggregation: AggregationType::Sum,
+                },
+                ValueWithAggregation {
+                    field: "Quantity".to_string(),
+                    aggregation: AggregationType::Mean,
+                },
+            ],
+            filters: None,
+        };
+        let result = generate_pivot(request);
+        assert!(result.is_ok());
+        let pivot_result = result.unwrap();
+
+        // Should have 2 rows (USA, Canada)
+        assert_eq!(pivot_result.data.len(), 2);
+
+        // Should have column headers for both aggregations
+        let all_headers = &pivot_result.column_headers[0];
+
+        // Check that we have headers for both Sales and Quantity
+        let has_sales = all_headers.iter().any(|h| h.contains("Sales"));
+        let has_quantity = all_headers.iter().any(|h| h.contains("Quantity"));
+        assert!(has_sales, "Should have Sales columns");
+        assert!(has_quantity, "Should have Quantity columns");
+    }
+
+    #[test]
+    fn test_pivot_with_filter() {
+        let file_path = create_test_csv();
+        let request = PivotRequest {
+            data_path: file_path.clone(),
+            rows: vec!["Country".to_string()],
+            columns: vec![],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: Some(vec![FilterCondition {
+                column: "Country".to_string(),
+                operator: FilterOperator::Equal,
+                value: serde_json::Value::String("USA".to_string()),
+            }]),
+        };
+        let result = generate_pivot(request);
+        assert!(result.is_ok());
+        let pivot_result = result.unwrap();
+
+        // Should have only 1 row (USA) after filtering
+        assert_eq!(pivot_result.data.len(), 1);
+
+        // Check that the row is USA
+        let first_row = &pivot_result.data[0];
+        assert_eq!(first_row.get("Country"), Some(&serde_json::Value::String("USA".to_string())));
+    }
+
+    #[test]
+    fn test_aggregation_types() {
+        let file_path = create_test_csv();
+
+        // Test different aggregation types
+        let agg_types = vec![
+            AggregationType::Sum,
+            AggregationType::Mean,
+            AggregationType::Count,
+            AggregationType::Min,
+            AggregationType::Max,
+        ];
+
+        for agg_type in agg_types {
+            let request = PivotRequest {
+                data_path: file_path.clone(),
+                rows: vec!["Country".to_string()],
+                columns: vec![],
+                values: vec![ValueWithAggregation {
+                    field: "Sales".to_string(),
+                    aggregation: agg_type.clone(),
+                }],
+                filters: None,
+            };
+            let result = generate_pivot(request);
+            assert!(result.is_ok(), "Failed for aggregation type: {:?}", agg_type);
+        }
+    }
+
+    #[test]
+    fn test_filter_operators() {
+        let file_path = create_test_csv();
+
+        // Test Greater Than filter
+        let request = PivotRequest {
+            data_path: file_path.clone(),
+            rows: vec!["Product".to_string()],
+            columns: vec![],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: Some(vec![FilterCondition {
+                column: "Sales".to_string(),
+                operator: FilterOperator::GreaterThan,
+                value: serde_json::Value::Number(serde_json::Number::from(1200)),
+            }]),
+        };
+        let result = generate_pivot(request);
+        assert!(result.is_ok());
+
+        // Test In filter
+        let request2 = PivotRequest {
+            data_path: file_path.clone(),
+            rows: vec!["Country".to_string()],
+            columns: vec![],
+            values: vec![ValueWithAggregation {
+                field: "Sales".to_string(),
+                aggregation: AggregationType::Sum,
+            }],
+            filters: Some(vec![FilterCondition {
+                column: "Country".to_string(),
+                operator: FilterOperator::In,
+                value: serde_json::json!(["USA", "Canada"]),
+            }]),
+        };
+        let result2 = generate_pivot(request2);
+        assert!(result2.is_ok());
+    }
+}
