@@ -35,16 +35,28 @@ export interface FilterCondition {
   value: any;
 }
 
+export enum SortOrder {
+  Ascending = "Ascending",
+  Descending = "Descending"
+}
+
+export interface SortConfig {
+  column: string;
+  order: SortOrder;
+}
+
 export interface PivotRequest {
   data_path: string;
   rows: string[];
   columns: string[];
   values: ValueWithAggregation[];
   filters?: FilterCondition[];
+  sort?: SortConfig;
 }
 
 export interface PivotResult {
   data: Record<string, any>[];
   column_headers: string[][];
   row_headers: string[];
+  grand_total?: Record<string, any>;
 } 

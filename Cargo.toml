@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "turbopivot-core",
   "src-tauri"
-] 
+]
 resolver = "2"

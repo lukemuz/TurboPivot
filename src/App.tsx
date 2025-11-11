@@ -4,8 +4,9 @@ import "./App.css";
 import FileSelector from "./components/FileSelector";
 import PivotConfigurator from "./components/PivotConfigurator";
 import FilterConfigurator from "./components/FilterConfigurator";
+import SortConfigurator from "./components/SortConfigurator";
 import PivotTable from "./components/PivotTable";
-import { FilterCondition, PivotRequest, PivotResult, ValueWithAggregation } from "./components/types";
+import { FilterCondition, PivotRequest, PivotResult, SortConfig, ValueWithAggregation } from "./components/types";
 
 function App() {
   const [filePath, setFilePath] = useState<string | null>(null);
@@ -14,6 +15,7 @@ function App() {
   const [columnFields, setColumnFields] = useState<string[]>([]);
   const [valueFields, setValueFields] = useState<ValueWithAggregation[]>([]);
   const [filters, setFilters] = useState<FilterCondition[]>([]);
+  const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
   const [pivotResult, setPivotResult] = useState<PivotResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +45,11 @@ function App() {
     setFilters(newFilters);
   };
 
+  // Handle sort changes
+  const handleSortChange = (newSort: SortConfig | null) => {
+    setSortConfig(newSort);
+  };
+
   // Generate pivot table
   const generatePivot = async () => {
     if (!filePath) {
@@ -50,8 +57,20 @@ function App() {
       return;
     }
 
+    if (rowFields.length === 0 && columnFields.length === 0) {
+      setError("Please select at least one row or column field");
+      return;
+    }
+
     if (valueFields.length === 0) {
       setError("Please select at least one value field with aggregation");
+      return;
+    }
+
+    // Check for duplicate fields in rows and columns
+    const duplicates = rowFields.filter(f => columnFields.includes(f));
+    if (duplicates.length > 0) {
+      setError(`Field(s) cannot be in both rows and columns: ${duplicates.join(", ")}`);
       return;
     }
 
@@ -64,7 +83,8 @@ function App() {
         rows: rowFields,
         columns: columnFields,
         values: valueFields,
-        filters: filters.length > 0 ? filters : undefined
+        filters: filters.length > 0 ? filters : undefined,
+        sort: sortConfig || undefined
       };
 
       console.log("Sending request:", request);
@@ -73,7 +93,24 @@ function App() {
       setPivotResult(result);
     } catch (err) {
       console.error("Error generating pivot:", err);
-      setError(`Error generating pivot: ${err instanceof Error ? err.message : String(err)}`);
+      // Extract more user-friendly error messages
+      let errorMessage = "Error generating pivot";
+      if (err instanceof Error) {
+        errorMessage = err.message;
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      } else {
+        errorMessage = String(err);
+      }
+
+      // Make error message more user-friendly
+      if (errorMessage.includes("does not exist in the dataset")) {
+        setError(`❌ ${errorMessage}`);
+      } else if (errorMessage.includes("At least one")) {
+        setError(`⚠️ Configuration Error: ${errorMessage}`);
+      } else {
+        setError(`❌ ${errorMessage}`);
+      }
       setPivotResult(null);
     } finally {
       setIsLoading(false);
@@ -103,7 +140,15 @@ function App() {
                 columns={columns}
                 onFiltersChange={handleFiltersChange}
               />
-              
+
+              <SortConfigurator
+                columns={columns}
+                rowFields={rowFields}
+                columnFields={columnFields}
+                valueFields={valueFields.map(v => `${v.field} (${v.aggregation})`)}
+                onSortChange={handleSortChange}
+              />
+
               <button 
                 className="generate-button"
                 onClick={generatePivot}

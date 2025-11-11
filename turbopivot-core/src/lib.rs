@@ -378,24 +378,24 @@ fn calculate_grand_totals(df: &DataFrame, value_columns: &[String]) -> HashMap<S
             match col.dtype() {
                 DataType::Int32 | DataType::Int64 | DataType::Float32 | DataType::Float64 => {
                     if let Ok(sum_series) = col.sum_reduce() {
-                        let total_value = match sum_series {
-                            polars::prelude::AnyValue::Int32(v) => serde_json::Value::Number(serde_json::Number::from(v)),
+                        let total_value = match sum_series.value() {
+                            polars::prelude::AnyValue::Int32(v) => serde_json::Value::Number(serde_json::Number::from(*v)),
                             polars::prelude::AnyValue::Int64(v) => {
-                                if v > i64::pow(2, 53) || v < -i64::pow(2, 53) {
+                                if *v > i64::pow(2, 53) || *v < -i64::pow(2, 53) {
                                     serde_json::Value::String(v.to_string())
                                 } else {
-                                    serde_json::Value::Number(serde_json::Number::from_f64(v as f64).unwrap())
+                                    serde_json::Value::Number(serde_json::Number::from_f64(*v as f64).unwrap())
                                 }
                             },
                             polars::prelude::AnyValue::Float64(v) => {
-                                if let Some(num) = serde_json::Number::from_f64(v) {
+                                if let Some(num) = serde_json::Number::from_f64(*v) {
                                     serde_json::Value::Number(num)
                                 } else {
                                     serde_json::Value::Null
                                 }
                             },
                             polars::prelude::AnyValue::Float32(v) => {
-                                if let Some(num) = serde_json::Number::from_f64(v as f64) {
+                                if let Some(num) = serde_json::Number::from_f64(*v as f64) {
                                     serde_json::Value::Number(num)
                                 } else {
                                     serde_json::Value::Null
@@ -520,28 +520,28 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
             final_df = apply_sorting(final_df, sort_config)?;
         }
 
-        let data = df_to_json_rows(final_df).map_err(|e| DataError::ProcessingError(e.to_string()))?;
-        
         let value_headers = request.values.iter()
-            .map(|v| format!("{}_{}", 
+            .map(|v| format!("{}_{}",
                 match v.aggregation {
                     AggregationType::Sum => "sum",
                     AggregationType::Mean => "mean",
                     AggregationType::Count => "count",
                     AggregationType::Min => "min",
                     AggregationType::Max => "max",
-                    AggregationType::First => "first", 
+                    AggregationType::First => "first",
                     AggregationType::Last => "last",
                     AggregationType::Median => "median",
                     AggregationType::Std => "std",
                     AggregationType::Var => "var",
-                }, 
+                },
                 v.field
             ))
             .collect::<Vec<String>>();
 
-        // Calculate grand totals
+        // Calculate grand totals before consuming final_df
         let grand_total = Some(calculate_grand_totals(&final_df, &value_headers));
+
+        let data = df_to_json_rows(final_df).map_err(|e| DataError::ProcessingError(e.to_string()))?;
 
         Ok(PivotResult {
             data,
@@ -612,8 +612,10 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
         // Rename columns from first pivot for consistency
         let row_columns_set: std::collections::HashSet<_> = request.rows.iter().map(|s| s.as_str()).collect();
         let val_agg = &pivoted_dfs[0].1;
-        for col_name in merged_df.get_column_names() {
-            if !row_columns_set.contains(col_name) {
+        // Collect column names first to avoid borrow checker issues
+        let column_names: Vec<String> = merged_df.get_column_names().iter().map(|s| s.to_string()).collect();
+        for col_name in &column_names {
+            if !row_columns_set.contains(col_name.as_str()) {
                 let new_name = format!("{}_{}_{}",
                     match val_agg.aggregation {
                         AggregationType::Sum => "sum",
@@ -630,8 +632,9 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
                     val_agg.field,
                     col_name
                 );
-                merged_df = merged_df.rename(col_name, &new_name)
+                merged_df.rename(col_name, &new_name)
                     .map_err(|e| DataError::ProcessingError(format!("Rename error: {}", e)))?;
+                // Note: rename() now modifies in-place
                 value_column_mapping.push((new_name, col_name.to_string(), val_agg.clone()));
             }
         }
@@ -641,8 +644,10 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
             let (mut df, val_agg) = pivoted_dfs[i].clone();
 
             // Rename value columns to avoid conflicts
-            for col_name in df.get_column_names() {
-                if !row_columns_set.contains(col_name) {
+            // Collect column names first to avoid borrow checker issues
+            let df_column_names: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+            for col_name in &df_column_names {
+                if !row_columns_set.contains(col_name.as_str()) {
                     let new_name = format!("{}_{}_{}",
                         match val_agg.aggregation {
                             AggregationType::Sum => "sum",
@@ -659,8 +664,9 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
                         val_agg.field,
                         col_name
                     );
-                    df = df.rename(col_name, &new_name)
+                    df.rename(col_name, &new_name)
                         .map_err(|e| DataError::ProcessingError(format!("Rename error: {}", e)))?;
+                    // Note: rename() now modifies in-place
                     value_column_mapping.push((new_name.clone(), col_name.to_string(), val_agg.clone()));
                 }
             }
@@ -900,6 +906,7 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: None,
+            sort: None,
         };
         let result = validate_pivot_request(&request);
         assert!(result.is_err());
@@ -914,6 +921,7 @@ mod tests {
             columns: vec![],
             values: vec![],
             filters: None,
+            sort: None,
         };
         let result = validate_pivot_request(&request);
         assert!(result.is_err());
@@ -931,6 +939,7 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: None,
+            sort: None,
         };
         let result = validate_pivot_request(&request);
         assert!(result.is_err());
@@ -948,6 +957,7 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: None,
+            sort: None,
         };
         let result = validate_pivot_request(&request);
         assert!(result.is_ok());
@@ -964,6 +974,7 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: None,
+            sort: None,
         };
         let available = vec!["Country".to_string(), "Sales".to_string()];
         let result = validate_columns_exist(&request, &available);
@@ -982,6 +993,7 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: None,
+            sort: None,
         };
         let available = vec!["Country".to_string(), "Sales".to_string()];
         let result = validate_columns_exist(&request, &available);
@@ -1000,6 +1012,7 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: None,
+            sort: None,
         };
         let available = vec!["Country".to_string(), "Sales".to_string()];
         let result = validate_columns_exist(&request, &available);
@@ -1018,6 +1031,7 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: None,
+            sort: None,
         };
         let result = generate_pivot(request);
         assert!(result.is_ok());
@@ -1046,6 +1060,7 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: None,
+            sort: None,
         };
         let result = generate_pivot(request);
         assert!(result.is_ok());
@@ -1079,6 +1094,7 @@ mod tests {
                 },
             ],
             filters: None,
+            sort: None,
         };
         let result = generate_pivot(request);
         assert!(result.is_ok());
@@ -1113,6 +1129,7 @@ mod tests {
                 operator: FilterOperator::Equal,
                 value: serde_json::Value::String("USA".to_string()),
             }]),
+            sort: None,
         };
         let result = generate_pivot(request);
         assert!(result.is_ok());
@@ -1149,6 +1166,7 @@ mod tests {
                     aggregation: agg_type.clone(),
                 }],
                 filters: None,
+                sort: None,
             };
             let result = generate_pivot(request);
             assert!(result.is_ok(), "Failed for aggregation type: {:?}", agg_type);
@@ -1173,6 +1191,7 @@ mod tests {
                 operator: FilterOperator::GreaterThan,
                 value: serde_json::Value::Number(serde_json::Number::from(1200)),
             }]),
+            sort: None,
         };
         let result = generate_pivot(request);
         assert!(result.is_ok());
@@ -1191,6 +1210,7 @@ mod tests {
                 operator: FilterOperator::In,
                 value: serde_json::json!(["USA", "Canada"]),
             }]),
+            sort: None,
         };
         let result2 = generate_pivot(request2);
         assert!(result2.is_ok());
