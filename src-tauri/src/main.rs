@@ -1,8 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// Import the polars_bridge module
-mod polars_bridge;
+// Use the library crate
+use turbopivot::{get_column_names, generate_pivot, PivotRequest, PivotResult};
 
 // Greet command from the original lib.rs
 #[tauri::command]
@@ -12,13 +12,13 @@ fn greet(name: &str) -> String {
 
 #[tauri::command]
 fn get_csv_columns(file_path: String) -> Result<Vec<String>, String> {
-    polars_bridge::get_column_names(&file_path)
+    get_column_names(&file_path)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn run_pivot(request: polars_bridge::PivotRequest) -> Result<polars_bridge::PivotResult, String> {
-    polars_bridge::generate_pivot(request)
+fn run_pivot(request: PivotRequest) -> Result<PivotResult, String> {
+    generate_pivot(request)
         .map_err(|e| e.to_string())
 }
 
