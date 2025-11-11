@@ -50,8 +50,20 @@ function App() {
       return;
     }
 
+    if (rowFields.length === 0 && columnFields.length === 0) {
+      setError("Please select at least one row or column field");
+      return;
+    }
+
     if (valueFields.length === 0) {
       setError("Please select at least one value field with aggregation");
+      return;
+    }
+
+    // Check for duplicate fields in rows and columns
+    const duplicates = rowFields.filter(f => columnFields.includes(f));
+    if (duplicates.length > 0) {
+      setError(`Field(s) cannot be in both rows and columns: ${duplicates.join(", ")}`);
       return;
     }
 
@@ -73,7 +85,24 @@ function App() {
       setPivotResult(result);
     } catch (err) {
       console.error("Error generating pivot:", err);
-      setError(`Error generating pivot: ${err instanceof Error ? err.message : String(err)}`);
+      // Extract more user-friendly error messages
+      let errorMessage = "Error generating pivot";
+      if (err instanceof Error) {
+        errorMessage = err.message;
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      } else {
+        errorMessage = String(err);
+      }
+
+      // Make error message more user-friendly
+      if (errorMessage.includes("does not exist in the dataset")) {
+        setError(`❌ ${errorMessage}`);
+      } else if (errorMessage.includes("At least one")) {
+        setError(`⚠️ Configuration Error: ${errorMessage}`);
+      } else {
+        setError(`❌ ${errorMessage}`);
+      }
       setPivotResult(null);
     } finally {
       setIsLoading(false);

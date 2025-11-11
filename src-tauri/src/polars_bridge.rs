@@ -127,6 +127,91 @@ pub fn get_column_names(file_path: &str) -> Result<Vec<String>, DataError> {
     Ok(schema.iter_names().map(|name| name.to_string()).collect())
 }
 
+fn validate_pivot_request(request: &PivotRequest) -> Result<(), DataError> {
+    // Check that at least one of rows or columns is specified
+    if request.rows.is_empty() && request.columns.is_empty() {
+        return Err(DataError::ProcessingError(
+            "At least one row or column field must be specified".to_string()
+        ));
+    }
+
+    // Check that at least one value field is specified
+    if request.values.is_empty() {
+        return Err(DataError::ProcessingError(
+            "At least one value field must be specified".to_string()
+        ));
+    }
+
+    // Check that value field names are not empty
+    for val in &request.values {
+        if val.field.is_empty() {
+            return Err(DataError::ProcessingError(
+                "Value field name cannot be empty".to_string()
+            ));
+        }
+    }
+
+    // Check that no duplicate fields across rows, columns, and values
+    let mut all_fields = std::collections::HashSet::new();
+    for field in request.rows.iter().chain(request.columns.iter()) {
+        if !all_fields.insert(field) {
+            return Err(DataError::ProcessingError(
+                format!("Duplicate field in rows/columns: {}", field)
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_columns_exist(request: &PivotRequest, available_columns: &[String]) -> Result<(), DataError> {
+    let available_set: std::collections::HashSet<_> = available_columns.iter().collect();
+
+    // Check row fields
+    for field in &request.rows {
+        if !available_set.contains(field) {
+            return Err(DataError::ProcessingError(
+                format!("Row field '{}' does not exist in the dataset. Available columns: {}",
+                    field, available_columns.join(", "))
+            ));
+        }
+    }
+
+    // Check column fields
+    for field in &request.columns {
+        if !available_set.contains(field) {
+            return Err(DataError::ProcessingError(
+                format!("Column field '{}' does not exist in the dataset. Available columns: {}",
+                    field, available_columns.join(", "))
+            ));
+        }
+    }
+
+    // Check value fields
+    for val in &request.values {
+        if !available_set.contains(&val.field) {
+            return Err(DataError::ProcessingError(
+                format!("Value field '{}' does not exist in the dataset. Available columns: {}",
+                    val.field, available_columns.join(", "))
+            ));
+        }
+    }
+
+    // Check filter columns
+    if let Some(filters) = &request.filters {
+        for filter in filters {
+            if !available_set.contains(&filter.column) {
+                return Err(DataError::ProcessingError(
+                    format!("Filter column '{}' does not exist in the dataset. Available columns: {}",
+                        filter.column, available_columns.join(", "))
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn apply_filter(lf: LazyFrame, filter: &FilterCondition) -> Result<LazyFrame, DataError> {
     let col_expr = col(&filter.column);
     
@@ -271,9 +356,18 @@ fn apply_filter(lf: LazyFrame, filter: &FilterCondition) -> Result<LazyFrame, Da
 }
 
 pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
+    // Validate request
+    validate_pivot_request(&request)?;
+
     // Read the data as a LazyFrame
     let mut lf = read_data(&request.data_path)?;
-    
+
+    // Validate that all requested columns exist in the data
+    let schema = lf.schema()
+        .map_err(|e| DataError::ProcessingError(format!("Failed to get schema: {}", e)))?;
+    let available_columns: Vec<String> = schema.iter_names().map(|s| s.to_string()).collect();
+    validate_columns_exist(&request, &available_columns)?;
+
     // Apply filters if they exist
     if let Some(filters) = &request.filters {
         for filter in filters {
@@ -362,72 +456,150 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
         })
     } else {
         // We need to pivot the DataFrame
-        let val_with_agg = &request.values[0]; // Using just the first value for simplicity
-        let agg_col_name = format!(
-            "{}_{}",
-            match val_with_agg.aggregation {
-                AggregationType::Sum => "sum",
-                AggregationType::Mean => "mean",
-                AggregationType::Count => "count",
-                AggregationType::Min => "min",
-                AggregationType::Max => "max",
-                AggregationType::First => "first",
-                AggregationType::Last => "last",
-                AggregationType::Median => "median",
-                AggregationType::Std => "std",
-                AggregationType::Var => "var",
-            },
-            val_with_agg.field
-        );
-        
-        // Map our aggregation type to PivotAgg
-        let pivot_agg = match val_with_agg.aggregation {
-            AggregationType::Sum => PivotAgg::Sum,
-            AggregationType::Mean => PivotAgg::Mean,
-            AggregationType::Count => PivotAgg::Count,
-            AggregationType::Min => PivotAgg::Min,
-            AggregationType::Max => PivotAgg::Max,
-            AggregationType::First => PivotAgg::First,
-            AggregationType::Last => PivotAgg::Last,
-            AggregationType::Median => PivotAgg::Median,
-            // For Std and Var, use First since they don't have direct equivalents
-            AggregationType::Std => PivotAgg::First,
-            AggregationType::Var => PivotAgg::First,
-        };
-        
-        // REVERSED pivot parameters:
-        let pivoted = pivot(
-            &agg_df,
-            // Use columns (processing methods) as the index instead of rows
-            request.columns.iter().map(|s| s.as_str()).collect::<Vec<&str>>(), 
-            // Use rows (countries) as the columns instead of columns
-            Some(request.rows.iter().map(|s| s.as_str()).collect::<Vec<&str>>()), 
-            Some(vec![agg_col_name.as_str()]), // values
-            false, // maintain_order
-            Some(pivot_agg),
-            None,  // separator
-        )
-        .map_err(|e| DataError::ProcessingError(format!("Pivot error: {}", e)))?;
-        
+        // Process each value field separately and merge results
+        let mut pivoted_dfs: Vec<(DataFrame, ValueWithAggregation)> = Vec::new();
+
+        for val_with_agg in &request.values {
+            let agg_col_name = format!(
+                "{}_{}",
+                match val_with_agg.aggregation {
+                    AggregationType::Sum => "sum",
+                    AggregationType::Mean => "mean",
+                    AggregationType::Count => "count",
+                    AggregationType::Min => "min",
+                    AggregationType::Max => "max",
+                    AggregationType::First => "first",
+                    AggregationType::Last => "last",
+                    AggregationType::Median => "median",
+                    AggregationType::Std => "std",
+                    AggregationType::Var => "var",
+                },
+                val_with_agg.field
+            );
+
+            // Map our aggregation type to PivotAgg
+            let pivot_agg = match val_with_agg.aggregation {
+                AggregationType::Sum => PivotAgg::Sum,
+                AggregationType::Mean => PivotAgg::Mean,
+                AggregationType::Count => PivotAgg::Count,
+                AggregationType::Min => PivotAgg::Min,
+                AggregationType::Max => PivotAgg::Max,
+                AggregationType::First => PivotAgg::First,
+                AggregationType::Last => PivotAgg::Last,
+                AggregationType::Median => PivotAgg::Median,
+                // For Std and Var, we already calculated them in the aggregation phase
+                // The pivot will use First to just take the pre-calculated value
+                AggregationType::Std => PivotAgg::First,
+                AggregationType::Var => PivotAgg::First,
+            };
+
+            // REVERSED pivot parameters:
+            let pivoted = pivot(
+                &agg_df,
+                // Use columns (processing methods) as the index instead of rows
+                request.columns.iter().map(|s| s.as_str()).collect::<Vec<&str>>(),
+                // Use rows (countries) as the columns instead of columns
+                Some(request.rows.iter().map(|s| s.as_str()).collect::<Vec<&str>>()),
+                Some(vec![agg_col_name.as_str()]), // values
+                false, // maintain_order
+                Some(pivot_agg),
+                None,  // separator
+            )
+            .map_err(|e| DataError::ProcessingError(format!("Pivot error: {}", e)))?;
+
+            pivoted_dfs.push((pivoted, val_with_agg.clone()));
+        }
+
+        // Merge all pivoted dataframes on row columns and rename columns to avoid conflicts
+        let mut merged_df = pivoted_dfs[0].0.clone();
+        let mut value_column_mapping: Vec<(String, String, ValueWithAggregation)> = Vec::new();
+
+        // Rename columns from first pivot for consistency
+        let row_columns_set: std::collections::HashSet<_> = request.rows.iter().map(|s| s.as_str()).collect();
+        let val_agg = &pivoted_dfs[0].1;
+        for col_name in merged_df.get_column_names() {
+            if !row_columns_set.contains(col_name) {
+                let new_name = format!("{}_{}_{}",
+                    match val_agg.aggregation {
+                        AggregationType::Sum => "sum",
+                        AggregationType::Mean => "mean",
+                        AggregationType::Count => "count",
+                        AggregationType::Min => "min",
+                        AggregationType::Max => "max",
+                        AggregationType::First => "first",
+                        AggregationType::Last => "last",
+                        AggregationType::Median => "median",
+                        AggregationType::Std => "std",
+                        AggregationType::Var => "var",
+                    },
+                    val_agg.field,
+                    col_name
+                );
+                merged_df = merged_df.rename(col_name, &new_name)
+                    .map_err(|e| DataError::ProcessingError(format!("Rename error: {}", e)))?;
+                value_column_mapping.push((new_name, col_name.to_string(), val_agg.clone()));
+            }
+        }
+
+        // Join remaining pivots and track their columns
+        for i in 1..pivoted_dfs.len() {
+            let (mut df, val_agg) = pivoted_dfs[i].clone();
+
+            // Rename value columns to avoid conflicts
+            for col_name in df.get_column_names() {
+                if !row_columns_set.contains(col_name) {
+                    let new_name = format!("{}_{}_{}",
+                        match val_agg.aggregation {
+                            AggregationType::Sum => "sum",
+                            AggregationType::Mean => "mean",
+                            AggregationType::Count => "count",
+                            AggregationType::Min => "min",
+                            AggregationType::Max => "max",
+                            AggregationType::First => "first",
+                            AggregationType::Last => "last",
+                            AggregationType::Median => "median",
+                            AggregationType::Std => "std",
+                            AggregationType::Var => "var",
+                        },
+                        val_agg.field,
+                        col_name
+                    );
+                    df = df.rename(col_name, &new_name)
+                        .map_err(|e| DataError::ProcessingError(format!("Rename error: {}", e)))?;
+                    value_column_mapping.push((new_name.clone(), col_name.to_string(), val_agg.clone()));
+                }
+            }
+
+            // Join on row columns
+            let join_cols: Vec<&str> = request.rows.iter().map(|s| s.as_str()).collect();
+            merged_df = merged_df.join(
+                &df,
+                &join_cols,
+                &join_cols,
+                JoinArgs::new(JoinType::Left)
+            )
+            .map_err(|e| DataError::ProcessingError(format!("Join error: {}", e)))?;
+        }
+
+        let pivoted = merged_df;
+
         println!("Pivoted DataFrame: {:?}", pivoted);
-        
+
         // Extract column headers from the pivoted DataFrame
         let all_columns = pivoted.get_column_names();
         println!("All columns: {:?}", all_columns);
-        
+
         // We know the row identifier column(s) from the request
         let row_columns = request.rows.clone();
-        
-        // The remaining columns in the pivoted dataframe are the "value" columns
-        // These will typically be combinations of the column values
-        let value_columns: Vec<String> = all_columns.iter()
-            .filter(|&name| !row_columns.contains(&name.to_string()))
-            .map(|s| s.to_string())
+
+        // Extract value column names for headers (just the renamed column names)
+        let value_columns: Vec<String> = value_column_mapping.iter()
+            .map(|(renamed, _, _)| renamed.clone())
             .collect();
-        
+
         println!("Row columns: {:?}", row_columns);
         println!("Value columns: {:?}", value_columns);
-        
+
         // Create column headers structure for frontend
         let column_headers = vec![value_columns.clone()];
         
@@ -487,25 +659,8 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
                         Ok(AnyValue::Null) => serde_json::Value::Null,
                         _ => serde_json::Value::String(format!("{:?}", col.get(i))),
                     };
-                    
-                    // Use the aggregation type from the request to form the key prefix
-                    let agg_prefix = match &request.values[0].aggregation {
-                        AggregationType::Sum => "sum",
-                        AggregationType::Mean => "mean",
-                        AggregationType::Count => "count",
-                        AggregationType::Min => "min",
-                        AggregationType::Max => "max",
-                        AggregationType::First => "first",
-                        AggregationType::Last => "last",
-                        AggregationType::Median => "median",
-                        AggregationType::Std => "std",
-                        AggregationType::Var => "var",
-                    };
-                    
-                    // When we have column features, the frontend is still expecting the
-                    // aggregation prefix in the key
-                    let key = format!("{}_{}", agg_prefix, value_col);
-                    row_map.insert(key, value);
+
+                    row_map.insert(value_col.clone(), value);
                 }
             }
             
