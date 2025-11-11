@@ -42,12 +42,12 @@ describe('PivotTable', () => {
     // Check column headers
     expect(screen.getByText('sum_Sales')).toBeInTheDocument();
 
-    // Check data values
-    expect(screen.getByText('3,000')).toBeInTheDocument();
-    expect(screen.getByText('4,000')).toBeInTheDocument();
+    // Check data values - formatted as currency since column name contains "Sales"
+    expect(screen.getByText('$3,000.00')).toBeInTheDocument();
+    expect(screen.getByText('$4,000.00')).toBeInTheDocument();
   });
 
-  it('should format numbers with thousands separator', () => {
+  it('should format sales data as currency', () => {
     const mockResult: PivotResult = {
       data: [
         {
@@ -61,8 +61,62 @@ describe('PivotTable', () => {
 
     render(<PivotTable result={mockResult} isLoading={false} />);
 
-    // Check formatted number (with 2 decimal places)
+    // Sales columns should be formatted as currency
+    expect(screen.getByText('$1,234,567.89')).toBeInTheDocument();
+  });
+
+  it('should format non-currency numbers with thousands separator', () => {
+    const mockResult: PivotResult = {
+      data: [
+        {
+          Country: 'USA',
+          'sum_Population': 1234567.89,
+        },
+      ],
+      column_headers: [['sum_Population']],
+      row_headers: ['Country'],
+    };
+
+    render(<PivotTable result={mockResult} isLoading={false} />);
+
+    // Non-currency columns should be formatted with 2 decimals
     expect(screen.getByText('1,234,567.89')).toBeInTheDocument();
+  });
+
+  it('should format count data without decimals', () => {
+    const mockResult: PivotResult = {
+      data: [
+        {
+          Country: 'USA',
+          'count_Transactions': 1234567.89,
+        },
+      ],
+      column_headers: [['count_Transactions']],
+      row_headers: ['Country'],
+    };
+
+    render(<PivotTable result={mockResult} isLoading={false} />);
+
+    // Count columns should be formatted with no decimals
+    expect(screen.getByText('1,234,568')).toBeInTheDocument();
+  });
+
+  it('should format percentage data correctly', () => {
+    const mockResult: PivotResult = {
+      data: [
+        {
+          Country: 'USA',
+          'mean_ConversionRate': 0.1234,
+        },
+      ],
+      column_headers: [['mean_ConversionRate']],
+      row_headers: ['Country'],
+    };
+
+    render(<PivotTable result={mockResult} isLoading={false} />);
+
+    // Percentage columns should be formatted as percentages
+    expect(screen.getByText('12.3%')).toBeInTheDocument();
   });
 
   it('should handle null values', () => {

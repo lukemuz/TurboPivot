@@ -75,9 +75,8 @@ describe('App', () => {
 
   it('should render FileSelector component', () => {
     render(<App />);
-    // FileSelector should have a button or input for file selection
-    // This is a basic integration test
-    expect(screen.getByRole('main') || screen.getByText(/TurboPivot/i)).toBeInTheDocument();
+    // FileSelector should have a button for file selection
+    expect(screen.getByText(/Select CSV or Parquet File/i)).toBeInTheDocument();
   });
 
   it('should have sidebar and main content layout', () => {
