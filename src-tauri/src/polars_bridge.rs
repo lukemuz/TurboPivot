@@ -53,6 +53,18 @@ pub struct ValueWithAggregation {
     pub aggregation: AggregationType,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SortConfig {
+    pub column: String,  // Column name to sort by (can be row field or value column)
+    pub order: SortOrder,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PivotRequest {
     pub data_path: String,
@@ -60,6 +72,7 @@ pub struct PivotRequest {
     pub columns: Vec<String>,
     pub values: Vec<ValueWithAggregation>,
     pub filters: Option<Vec<FilterCondition>>,
+    pub sort: Option<SortConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -85,6 +98,7 @@ pub struct PivotResult {
     pub data: Vec<HashMap<String, serde_json::Value>>,
     pub column_headers: Vec<Vec<String>>, // Multi-level column headers
     pub row_headers: Vec<String>,
+    pub grand_total: Option<HashMap<String, serde_json::Value>>, // Grand totals row
 }
 
 pub fn read_data(file_path: &str) -> Result<LazyFrame, DataError> {
@@ -355,6 +369,77 @@ fn apply_filter(lf: LazyFrame, filter: &FilterCondition) -> Result<LazyFrame, Da
     Ok(lf.filter(filter_expr))
 }
 
+fn calculate_grand_totals(df: &DataFrame, value_columns: &[String]) -> HashMap<String, serde_json::Value> {
+    let mut totals = HashMap::new();
+
+    for col_name in value_columns {
+        if let Ok(col) = df.column(col_name) {
+            // Try to sum numeric columns
+            match col.dtype() {
+                DataType::Int32 | DataType::Int64 | DataType::Float32 | DataType::Float64 => {
+                    if let Ok(sum_series) = col.sum_reduce() {
+                        let total_value = match sum_series {
+                            polars::prelude::AnyValue::Int32(v) => serde_json::Value::Number(serde_json::Number::from(v)),
+                            polars::prelude::AnyValue::Int64(v) => {
+                                if v > i64::pow(2, 53) || v < -i64::pow(2, 53) {
+                                    serde_json::Value::String(v.to_string())
+                                } else {
+                                    serde_json::Value::Number(serde_json::Number::from_f64(v as f64).unwrap())
+                                }
+                            },
+                            polars::prelude::AnyValue::Float64(v) => {
+                                if let Some(num) = serde_json::Number::from_f64(v) {
+                                    serde_json::Value::Number(num)
+                                } else {
+                                    serde_json::Value::Null
+                                }
+                            },
+                            polars::prelude::AnyValue::Float32(v) => {
+                                if let Some(num) = serde_json::Number::from_f64(v as f64) {
+                                    serde_json::Value::Number(num)
+                                } else {
+                                    serde_json::Value::Null
+                                }
+                            },
+                            _ => serde_json::Value::Null,
+                        };
+                        totals.insert(col_name.clone(), total_value);
+                    }
+                },
+                _ => {
+                    // Non-numeric column, skip
+                }
+            }
+        }
+    }
+
+    // Add a label for the grand total row
+    totals.insert("__total_label__".to_string(), serde_json::Value::String("Grand Total".to_string()));
+
+    totals
+}
+
+fn apply_sorting(mut df: DataFrame, sort_config: &SortConfig) -> Result<DataFrame, DataError> {
+    // Check if the sort column exists
+    if df.column(&sort_config.column).is_err() {
+        return Err(DataError::ProcessingError(
+            format!("Sort column '{}' does not exist in the result", sort_config.column)
+        ));
+    }
+
+    // Sort the dataframe
+    let descending = matches!(sort_config.order, SortOrder::Descending);
+
+    df = df.sort(
+        [&sort_config.column],
+        SortMultipleOptions::default()
+            .with_order_descending(descending)
+    )
+    .map_err(|e| DataError::ProcessingError(format!("Sort error: {}", e)))?;
+
+    Ok(df)
+}
+
 pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
     // Validate request
     validate_pivot_request(&request)?;
@@ -429,7 +514,13 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
     // Transform the data using the actual pivot functionality
     if request.columns.is_empty() {
         // No need to pivot if there are no column fields
-        let data = df_to_json_rows(agg_df).map_err(|e| DataError::ProcessingError(e.to_string()))?;
+        // Apply sorting if configured
+        let mut final_df = agg_df;
+        if let Some(sort_config) = &request.sort {
+            final_df = apply_sorting(final_df, sort_config)?;
+        }
+
+        let data = df_to_json_rows(final_df).map_err(|e| DataError::ProcessingError(e.to_string()))?;
         
         let value_headers = request.values.iter()
             .map(|v| format!("{}_{}", 
@@ -448,11 +539,15 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
                 v.field
             ))
             .collect::<Vec<String>>();
-        
+
+        // Calculate grand totals
+        let grand_total = Some(calculate_grand_totals(&final_df, &value_headers));
+
         Ok(PivotResult {
             data,
             column_headers: vec![value_headers],
             row_headers: request.rows,
+            grand_total,
         })
     } else {
         // We need to pivot the DataFrame
@@ -581,7 +676,12 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
             .map_err(|e| DataError::ProcessingError(format!("Join error: {}", e)))?;
         }
 
-        let pivoted = merged_df;
+        let mut pivoted = merged_df;
+
+        // Apply sorting if configured
+        if let Some(sort_config) = &request.sort {
+            pivoted = apply_sorting(pivoted, sort_config)?;
+        }
 
         println!("Pivoted DataFrame: {:?}", pivoted);
 
@@ -668,12 +768,16 @@ pub fn generate_pivot(request: PivotRequest) -> Result<PivotResult, DataError> {
         }
         
         println!("Final data (rows: {}): {:?}", data.len(), data);
-        
+
+        // Calculate grand totals
+        let grand_total = Some(calculate_grand_totals(&pivoted, &value_columns));
+
         // Correct structure for frontend
         Ok(PivotResult {
             data,
             column_headers,
             row_headers: request.rows,
+            grand_total,
         })
     }
 }

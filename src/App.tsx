@@ -4,8 +4,9 @@ import "./App.css";
 import FileSelector from "./components/FileSelector";
 import PivotConfigurator from "./components/PivotConfigurator";
 import FilterConfigurator from "./components/FilterConfigurator";
+import SortConfigurator from "./components/SortConfigurator";
 import PivotTable from "./components/PivotTable";
-import { FilterCondition, PivotRequest, PivotResult, ValueWithAggregation } from "./components/types";
+import { FilterCondition, PivotRequest, PivotResult, SortConfig, ValueWithAggregation } from "./components/types";
 
 function App() {
   const [filePath, setFilePath] = useState<string | null>(null);
@@ -14,6 +15,7 @@ function App() {
   const [columnFields, setColumnFields] = useState<string[]>([]);
   const [valueFields, setValueFields] = useState<ValueWithAggregation[]>([]);
   const [filters, setFilters] = useState<FilterCondition[]>([]);
+  const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
   const [pivotResult, setPivotResult] = useState<PivotResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +43,11 @@ function App() {
   // Handle filter changes
   const handleFiltersChange = (newFilters: FilterCondition[]) => {
     setFilters(newFilters);
+  };
+
+  // Handle sort changes
+  const handleSortChange = (newSort: SortConfig | null) => {
+    setSortConfig(newSort);
   };
 
   // Generate pivot table
@@ -76,7 +83,8 @@ function App() {
         rows: rowFields,
         columns: columnFields,
         values: valueFields,
-        filters: filters.length > 0 ? filters : undefined
+        filters: filters.length > 0 ? filters : undefined,
+        sort: sortConfig || undefined
       };
 
       console.log("Sending request:", request);
@@ -132,7 +140,15 @@ function App() {
                 columns={columns}
                 onFiltersChange={handleFiltersChange}
               />
-              
+
+              <SortConfigurator
+                columns={columns}
+                rowFields={rowFields}
+                columnFields={columnFields}
+                valueFields={valueFields.map(v => `${v.field} (${v.aggregation})`)}
+                onSortChange={handleSortChange}
+              />
+
               <button 
                 className="generate-button"
                 onClick={generatePivot}
