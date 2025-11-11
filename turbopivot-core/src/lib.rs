@@ -379,7 +379,7 @@ fn calculate_grand_totals(df: &DataFrame, value_columns: &[String]) -> HashMap<S
                 DataType::Int32 | DataType::Int64 | DataType::Float32 | DataType::Float64 => {
                     if let Ok(sum_series) = col.sum_reduce() {
                         let total_value = match sum_series.value() {
-                            polars::prelude::AnyValue::Int32(v) => serde_json::Value::Number(serde_json::Number::from(v)),
+                            polars::prelude::AnyValue::Int32(v) => serde_json::Value::Number(serde_json::Number::from(*v)),
                             polars::prelude::AnyValue::Int64(v) => {
                                 if *v > i64::pow(2, 53) || *v < -i64::pow(2, 53) {
                                     serde_json::Value::String(v.to_string())
@@ -1125,11 +1125,11 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: Some(vec![FilterCondition {
-            sort: None,
                 column: "Country".to_string(),
                 operator: FilterOperator::Equal,
                 value: serde_json::Value::String("USA".to_string()),
             }]),
+            sort: None,
         };
         let result = generate_pivot(request);
         assert!(result.is_ok());
@@ -1166,6 +1166,7 @@ mod tests {
                     aggregation: agg_type.clone(),
                 }],
                 filters: None,
+                sort: None,
             };
             let result = generate_pivot(request);
             assert!(result.is_ok(), "Failed for aggregation type: {:?}", agg_type);
@@ -1186,11 +1187,11 @@ mod tests {
                 aggregation: AggregationType::Sum,
             }],
             filters: Some(vec![FilterCondition {
-            sort: None,
                 column: "Sales".to_string(),
                 operator: FilterOperator::GreaterThan,
                 value: serde_json::Value::Number(serde_json::Number::from(1200)),
             }]),
+            sort: None,
         };
         let result = generate_pivot(request);
         assert!(result.is_ok());
@@ -1200,17 +1201,16 @@ mod tests {
             data_path: file_path.clone(),
             rows: vec!["Country".to_string()],
             columns: vec![],
-            sort: None,
             values: vec![ValueWithAggregation {
                 field: "Sales".to_string(),
                 aggregation: AggregationType::Sum,
             }],
             filters: Some(vec![FilterCondition {
-            sort: None,
                 column: "Country".to_string(),
                 operator: FilterOperator::In,
                 value: serde_json::json!(["USA", "Canada"]),
             }]),
+            sort: None,
         };
         let result2 = generate_pivot(request2);
         assert!(result2.is_ok());
