@@ -87,13 +87,9 @@ function App() {
         sort: sortConfig || undefined
       };
 
-      console.log("Sending request:", request);
-      
       const result = await invoke("run_pivot", { request }) as PivotResult;
       setPivotResult(result);
     } catch (err) {
-      console.error("Error generating pivot:", err);
-      // Extract more user-friendly error messages
       let errorMessage = "Error generating pivot";
       if (err instanceof Error) {
         errorMessage = err.message;
@@ -102,15 +98,7 @@ function App() {
       } else {
         errorMessage = String(err);
       }
-
-      // Make error message more user-friendly
-      if (errorMessage.includes("does not exist in the dataset")) {
-        setError(`❌ ${errorMessage}`);
-      } else if (errorMessage.includes("At least one")) {
-        setError(`⚠️ Configuration Error: ${errorMessage}`);
-      } else {
-        setError(`❌ ${errorMessage}`);
-      }
+      setError(errorMessage);
       setPivotResult(null);
     } finally {
       setIsLoading(false);
@@ -142,10 +130,8 @@ function App() {
               />
 
               <SortConfigurator
-                columns={columns}
                 rowFields={rowFields}
-                columnFields={columnFields}
-                valueFields={valueFields.map(v => `${v.field} (${v.aggregation})`)}
+                resultColumnHeaders={pivotResult?.column_headers ?? []}
                 onSortChange={handleSortChange}
               />
 

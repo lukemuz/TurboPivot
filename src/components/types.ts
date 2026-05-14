@@ -25,7 +25,6 @@ export enum FilterOperator {
   LessThan = "LessThan",
   GreaterThanOrEqual = "GreaterThanOrEqual",
   LessThanOrEqual = "LessThanOrEqual",
-  Contains = "Contains",
   In = "In"
 }
 
@@ -54,9 +53,18 @@ export interface PivotRequest {
   sort?: SortConfig;
 }
 
+export interface ColumnHeader {
+  key: string;
+  label: string;
+  agg_label: string;
+  column_values: string[];
+  value_field: string;
+  aggregation: AggregationType;
+}
+
 export interface PivotResult {
   data: Record<string, any>[];
-  column_headers: string[][];
+  column_headers: ColumnHeader[];
   row_headers: string[];
   grand_total?: Record<string, any>;
-} 
+}
