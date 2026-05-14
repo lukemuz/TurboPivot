@@ -1,85 +1,145 @@
-import { useState } from "react";
-import { FilterCondition, FilterOperator } from "./types";
+import { useMemo } from "react";
+import { ColumnDtype, ColumnInfo, FilterCondition, FilterOperator } from "./types";
 
 interface FilterConfiguratorProps {
-  columns: string[];
+  columns: ColumnInfo[];
+  filters: FilterCondition[];
   onFiltersChange: (filters: FilterCondition[]) => void;
 }
 
-export default function FilterConfigurator({ columns, onFiltersChange }: FilterConfiguratorProps) {
-  const [filters, setFilters] = useState<FilterCondition[]>([]);
+const STRING_OPS: { op: FilterOperator; label: string }[] = [
+  { op: FilterOperator.Equal, label: "Equals" },
+  { op: FilterOperator.NotEqual, label: "Not equal" },
+  { op: FilterOperator.Contains, label: "Contains" },
+  { op: FilterOperator.StartsWith, label: "Starts with" },
+  { op: FilterOperator.EndsWith, label: "Ends with" },
+  { op: FilterOperator.In, label: "In list" },
+  { op: FilterOperator.NotIn, label: "Not in list" },
+  { op: FilterOperator.IsNull, label: "Is empty" },
+  { op: FilterOperator.IsNotNull, label: "Is not empty" },
+];
+
+const NUMERIC_OPS: { op: FilterOperator; label: string }[] = [
+  { op: FilterOperator.Equal, label: "=" },
+  { op: FilterOperator.NotEqual, label: "≠" },
+  { op: FilterOperator.GreaterThan, label: ">" },
+  { op: FilterOperator.LessThan, label: "<" },
+  { op: FilterOperator.GreaterThanOrEqual, label: "≥" },
+  { op: FilterOperator.LessThanOrEqual, label: "≤" },
+  { op: FilterOperator.Between, label: "Between" },
+  { op: FilterOperator.In, label: "In list" },
+  { op: FilterOperator.IsNull, label: "Is empty" },
+  { op: FilterOperator.IsNotNull, label: "Is not empty" },
+];
+
+const DATE_OPS: { op: FilterOperator; label: string }[] = [
+  { op: FilterOperator.Equal, label: "On" },
+  { op: FilterOperator.LessThan, label: "Before" },
+  { op: FilterOperator.GreaterThan, label: "After" },
+  { op: FilterOperator.Between, label: "Between" },
+  { op: FilterOperator.IsNull, label: "Is empty" },
+  { op: FilterOperator.IsNotNull, label: "Is not empty" },
+];
+
+const BOOL_OPS: { op: FilterOperator; label: string }[] = [
+  { op: FilterOperator.Equal, label: "Equals" },
+  { op: FilterOperator.NotEqual, label: "Not equal" },
+  { op: FilterOperator.IsNull, label: "Is empty" },
+  { op: FilterOperator.IsNotNull, label: "Is not empty" },
+];
+
+function opsFor(dtype: ColumnDtype | undefined): { op: FilterOperator; label: string }[] {
+  switch (dtype) {
+    case ColumnDtype.Integer:
+    case ColumnDtype.Float:
+      return NUMERIC_OPS;
+    case ColumnDtype.Date:
+    case ColumnDtype.Datetime:
+      return DATE_OPS;
+    case ColumnDtype.Boolean:
+      return BOOL_OPS;
+    default:
+      return STRING_OPS;
+  }
+}
+
+function operatorTakesValue(op: FilterOperator): boolean {
+  return op !== FilterOperator.IsNull && op !== FilterOperator.IsNotNull;
+}
+
+function operatorTakesArray(op: FilterOperator): boolean {
+  return op === FilterOperator.In || op === FilterOperator.NotIn || op === FilterOperator.Between;
+}
+
+function parseValueForFilter(
+  raw: string,
+  op: FilterOperator,
+  dtype: ColumnDtype | undefined
+): any {
+  if (!operatorTakesValue(op)) return null;
+  if (operatorTakesArray(op)) {
+    return raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((s) => coerce(s, dtype));
+  }
+  return coerce(raw, dtype);
+}
+
+function coerce(s: string, dtype: ColumnDtype | undefined): any {
+  if (dtype === ColumnDtype.Integer || dtype === ColumnDtype.Float) {
+    const n = Number(s);
+    return Number.isNaN(n) ? s : n;
+  }
+  if (dtype === ColumnDtype.Boolean) {
+    if (s.toLowerCase() === "true") return true;
+    if (s.toLowerCase() === "false") return false;
+  }
+  return s;
+}
+
+function valueToInputString(value: any, op: FilterOperator): string {
+  if (value === null || value === undefined) return "";
+  if (operatorTakesArray(op) && Array.isArray(value)) {
+    return value.join(", ");
+  }
+  return String(value);
+}
+
+export default function FilterConfigurator({
+  columns,
+  filters,
+  onFiltersChange,
+}: FilterConfiguratorProps) {
+  const dtypeByName = useMemo(
+    () => Object.fromEntries(columns.map((c) => [c.name, c.dtype])),
+    [columns]
+  );
 
   const addFilter = () => {
     if (columns.length === 0) return;
-    
-    const newFilter: FilterCondition = {
-      column: columns[0],
-      operator: FilterOperator.Equal,
-      value: ""
-    };
-    
-    const updatedFilters = [...filters, newFilter];
-    setFilters(updatedFilters);
-    onFiltersChange(updatedFilters);
+    const first = columns[0];
+    onFiltersChange([
+      ...filters,
+      { column: first.name, operator: FilterOperator.Equal, value: "" },
+    ]);
   };
 
   const removeFilter = (index: number) => {
-    const updatedFilters = filters.filter((_, i) => i !== index);
-    setFilters(updatedFilters);
-    onFiltersChange(updatedFilters);
+    onFiltersChange(filters.filter((_, i) => i !== index));
   };
 
-  const updateFilter = (index: number, field: keyof FilterCondition, value: any) => {
-    const updatedFilters = [...filters];
-    
-    if (field === "operator") {
-      updatedFilters[index].operator = value as FilterOperator;
-    } else if (field === "column") {
-      updatedFilters[index].column = value as string;
-    } else if (field === "value") {
-      // Try to parse numbers if possible
-      if (!isNaN(Number(value)) && value.trim() !== "") {
-        updatedFilters[index].value = Number(value);
-      } else if (value.toLowerCase() === "true") {
-        updatedFilters[index].value = true;
-      } else if (value.toLowerCase() === "false") {
-        updatedFilters[index].value = false;
-      } else {
-        // Handle comma-separated list for 'In' operator
-        if (updatedFilters[index].operator === FilterOperator.In) {
-          try {
-            // Split by comma and trim each item
-            const items = value.split(',').map((item: string) => item.trim());
-            // Try to convert to numbers where possible
-            const parsedItems = items.map((item: string) => {
-              if (!isNaN(Number(item)) && item !== "") return Number(item);
-              if (item.toLowerCase() === "true") return true;
-              if (item.toLowerCase() === "false") return false;
-              return item;
-            });
-            updatedFilters[index].value = parsedItems;
-          } catch (e) {
-            updatedFilters[index].value = value;
-          }
-        } else {
-          updatedFilters[index].value = value;
-        }
-      }
-    }
-
-    setFilters(updatedFilters);
-    onFiltersChange(updatedFilters);
+  const updateFilter = (index: number, patch: Partial<FilterCondition>) => {
+    const next = filters.map((f, i) => (i === index ? { ...f, ...patch } : f));
+    onFiltersChange(next);
   };
 
   return (
     <div className="filter-configurator">
       <div className="filter-header">
         <h3>Filters</h3>
-        <button 
-          onClick={addFilter}
-          className="add-filter-button"
-          title="Add Filter"
-        >
+        <button onClick={addFilter} className="add-filter-button" title="Add Filter">
           + Add Filter
         </button>
       </div>
@@ -88,58 +148,83 @@ export default function FilterConfigurator({ columns, onFiltersChange }: FilterC
         <div className="no-filters">No filters defined</div>
       ) : (
         <div className="filters-list">
-          {filters.map((filter, index) => (
-            <div key={index} className="filter-item">
-              <select
-                value={filter.column}
-                onChange={(e) => updateFilter(index, "column", e.target.value)}
-              >
-                {columns.map((col) => (
-                  <option key={col} value={col}>
-                    {col}
-                  </option>
-                ))}
-              </select>
+          {filters.map((filter, index) => {
+            const dtype = dtypeByName[filter.column];
+            const ops = opsFor(dtype);
+            const takesValue = operatorTakesValue(filter.operator);
+            const takesArray = operatorTakesArray(filter.operator);
 
-              <select
-                value={filter.operator}
-                onChange={(e) => updateFilter(index, "operator", e.target.value)}
-              >
-                <option value={FilterOperator.Equal}>Equal to</option>
-                <option value={FilterOperator.NotEqual}>Not equal to</option>
-                <option value={FilterOperator.GreaterThan}>Greater than</option>
-                <option value={FilterOperator.LessThan}>Less than</option>
-                <option value={FilterOperator.GreaterThanOrEqual}>Greater than or equal</option>
-                <option value={FilterOperator.LessThanOrEqual}>Less than or equal</option>
-                <option value={FilterOperator.In}>In list</option>
-              </select>
+            return (
+              <div key={index} className="filter-item">
+                <select
+                  value={filter.column}
+                  onChange={(e) => {
+                    const nextCol = e.target.value;
+                    const nextDtype = dtypeByName[nextCol];
+                    const allowed = opsFor(nextDtype).map((o) => o.op);
+                    const nextOp = allowed.includes(filter.operator)
+                      ? filter.operator
+                      : allowed[0];
+                    updateFilter(index, { column: nextCol, operator: nextOp });
+                  }}
+                >
+                  {columns.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
 
-              <input
-                type="text"
-                value={
-                  Array.isArray(filter.value) 
-                    ? filter.value.join(", ") 
-                    : filter.value?.toString() || ""
-                }
-                onChange={(e) => updateFilter(index, "value", e.target.value)}
-                placeholder={
-                  filter.operator === FilterOperator.In 
-                    ? "Value1, Value2, Value3..." 
-                    : "Value"
-                }
-              />
+                <select
+                  value={filter.operator}
+                  onChange={(e) =>
+                    updateFilter(index, { operator: e.target.value as FilterOperator })
+                  }
+                >
+                  {ops.map(({ op, label }) => (
+                    <option key={op} value={op}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
 
-              <button
-                onClick={() => removeFilter(index)}
-                className="remove-filter-button"
-                title="Remove Filter"
-              >
-                ×
-              </button>
-            </div>
-          ))}
+                {takesValue && (
+                  <input
+                    type={
+                      dtype === ColumnDtype.Date
+                        ? "date"
+                        : dtype === ColumnDtype.Datetime
+                        ? "datetime-local"
+                        : "text"
+                    }
+                    value={valueToInputString(filter.value, filter.operator)}
+                    onChange={(e) =>
+                      updateFilter(index, {
+                        value: parseValueForFilter(e.target.value, filter.operator, dtype),
+                      })
+                    }
+                    placeholder={
+                      takesArray
+                        ? filter.operator === FilterOperator.Between
+                          ? "low, high"
+                          : "v1, v2, v3..."
+                        : "value"
+                    }
+                  />
+                )}
+
+                <button
+                  onClick={() => removeFilter(index)}
+                  className="remove-filter-button"
+                  title="Remove Filter"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
-} 
+}

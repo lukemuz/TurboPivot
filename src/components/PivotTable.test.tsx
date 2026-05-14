@@ -27,6 +27,7 @@ describe('PivotTable', () => {
 
   it('renders rows and currency-formatted Sales cells', () => {
     const result: PivotResult = {
+      row_meta: [],
       data: [
         { Country: 'USA', sum_Sales: 3000 },
         { Country: 'Canada', sum_Sales: 4000 },
@@ -48,6 +49,7 @@ describe('PivotTable', () => {
 
   it('formats large currency values', () => {
     const result: PivotResult = {
+      row_meta: [],
       data: [{ Country: 'USA', sum_Sales: 1234567.89 }],
       column_headers: [
         header({ key: 'sum_Sales', agg_label: 'Sum of Sales', value_field: 'Sales' }),
@@ -60,6 +62,7 @@ describe('PivotTable', () => {
 
   it('formats non-currency numbers with thousands separator', () => {
     const result: PivotResult = {
+      row_meta: [],
       data: [{ Country: 'USA', sum_Population: 1234567.89 }],
       column_headers: [
         header({
@@ -76,6 +79,7 @@ describe('PivotTable', () => {
 
   it('formats count aggregations as integers', () => {
     const result: PivotResult = {
+      row_meta: [],
       data: [{ Country: 'USA', count_Transactions: 1234567.89 }],
       column_headers: [
         header({
@@ -93,6 +97,7 @@ describe('PivotTable', () => {
 
   it('formats rate as a percentage', () => {
     const result: PivotResult = {
+      row_meta: [],
       data: [{ Country: 'USA', mean_ConversionRate: 0.1234 }],
       column_headers: [
         header({
@@ -110,6 +115,7 @@ describe('PivotTable', () => {
 
   it('renders null values as empty cells', () => {
     const result: PivotResult = {
+      row_meta: [],
       data: [{ Country: 'USA', sum_Sales: null }],
       column_headers: [
         header({ key: 'sum_Sales', agg_label: 'Sum of Sales', value_field: 'Sales' }),
@@ -128,6 +134,7 @@ describe('PivotTable', () => {
     // would also match `..._12024`. This test confirms cells are looked up
     // by the exact `key` field.
     const result: PivotResult = {
+      row_meta: [],
       data: [
         {
           Country: 'USA',
@@ -171,6 +178,7 @@ describe('PivotTable', () => {
 
   it('renders multiple row headers', () => {
     const result: PivotResult = {
+      row_meta: [],
       data: [{ Country: 'USA', Region: 'West', sum_Sales: 1000 }],
       column_headers: [
         header({ key: 'sum_Sales', agg_label: 'Sum of Sales', value_field: 'Sales' }),
@@ -184,6 +192,7 @@ describe('PivotTable', () => {
 
   it('renders grand totals row when provided', () => {
     const result: PivotResult = {
+      row_meta: [],
       data: [
         { Country: 'USA', sum_Sales: 3000 },
         { Country: 'Canada', sum_Sales: 4000 },
