@@ -13,6 +13,7 @@ polars = { version = "0.41.0", features = [
     "json",
     "parquet",
     "dtype-datetime",
+    "dtype-date",
     "dtype-struct",
     "strings",
     "random",
@@ -20,6 +21,15 @@ polars = { version = "0.41.0", features = [
     "fmt",
     "performant",
     "pivot",
+    "csv",
+    "is_in",
+    "is_between",
+    "regex",
+    "concat_str",
 ] }
 thiserror = "2.0.11"
-polars-ops = { version = "0.41.0", features = ["pivot"] }
+polars-ops = { version = "0.41.0", features = ["pivot", "is_in", "is_between"] }
+calamine = "0.26"
+chrono = "0.4"
+rusqlite = { version = "0.31", features = ["bundled"] }
+postgres = "0.19"

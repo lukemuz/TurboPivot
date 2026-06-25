@@ -1,29 +1,19 @@
-import { useState, useEffect } from "react";
-import { SortConfig, SortOrder } from "./types";
+import { useEffect, useState } from "react";
+import { ColumnHeader, SortConfig, SortOrder } from "./types";
 
 interface SortConfiguratorProps {
-  columns: string[];
   rowFields: string[];
-  columnFields: string[];
-  valueFields: string[];
+  resultColumnHeaders: ColumnHeader[];
   onSortChange: (sort: SortConfig | null) => void;
 }
 
 export default function SortConfigurator({
-  columns,
   rowFields,
-  columnFields,
-  valueFields,
-  onSortChange
+  resultColumnHeaders,
+  onSortChange,
 }: SortConfiguratorProps) {
   const [sortColumn, setSortColumn] = useState<string>("");
   const [sortOrder, setSortOrder] = useState<SortOrder>(SortOrder.Ascending);
-
-  // Get all available columns for sorting (row fields + value columns)
-  const availableSortColumns = [
-    ...rowFields,
-    ...valueFields.map(v => `${v.split('(')[0].toLowerCase()}_${v.split('(')[1]?.replace(')', '') || v}`)
-  ];
 
   useEffect(() => {
     if (sortColumn) {
@@ -33,21 +23,24 @@ export default function SortConfigurator({
     }
   }, [sortColumn, sortOrder, onSortChange]);
 
-  const handleClearSort = () => {
-    setSortColumn("");
-    onSortChange(null);
-  };
+  // If the previously selected sort column disappears (e.g. after the user
+  // changes the pivot config), clear it so we don't send an invalid request.
+  useEffect(() => {
+    if (!sortColumn) return;
+    const valid =
+      rowFields.includes(sortColumn) ||
+      resultColumnHeaders.some((h) => h.key === sortColumn);
+    if (!valid) {
+      setSortColumn("");
+    }
+  }, [rowFields, resultColumnHeaders, sortColumn]);
 
   return (
     <div className="sort-configurator">
       <div className="sort-header">
         <h3>Sorting</h3>
         {sortColumn && (
-          <button
-            onClick={handleClearSort}
-            className="clear-sort-button"
-            title="Clear Sort"
-          >
+          <button onClick={() => setSortColumn("")} className="clear-sort-button" title="Clear Sort">
             Clear
           </button>
         )}
@@ -62,30 +55,24 @@ export default function SortConfigurator({
             onChange={(e) => setSortColumn(e.target.value)}
           >
             <option value="">No sorting</option>
-            <optgroup label="Row Fields">
-              {rowFields.map((field) => (
-                <option key={field} value={field}>
-                  {field}
-                </option>
-              ))}
-            </optgroup>
-            {valueFields.length > 0 && (
+            {rowFields.length > 0 && (
+              <optgroup label="Row Fields">
+                {rowFields.map((field) => (
+                  <option key={field} value={field}>
+                    {field}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {resultColumnHeaders.length > 0 && (
               <optgroup label="Value Columns">
-                {valueFields.map((field) => {
-                  // Parse the field to get the actual column name
-                  // Format is typically "FieldName (Aggregation)"
-                  const match = field.match(/(.+?)\s*\((.+)\)/);
-                  if (match) {
-                    const [, fieldName, aggType] = match;
-                    const columnName = `${aggType.toLowerCase()}_${fieldName}`;
-                    return (
-                      <option key={columnName} value={columnName}>
-                        {field}
-                      </option>
-                    );
-                  }
-                  return null;
-                })}
+                {resultColumnHeaders.map((h) => (
+                  <option key={h.key} value={h.key}>
+                    {h.column_values.length > 0
+                      ? `${h.agg_label} — ${h.column_values.join(" / ")}`
+                      : h.agg_label}
+                  </option>
+                ))}
               </optgroup>
             )}
           </select>
@@ -106,9 +93,9 @@ export default function SortConfigurator({
         )}
       </div>
 
-      {sortColumn && (
-        <div className="sort-summary">
-          Sorting by <strong>{sortColumn}</strong> ({sortOrder === SortOrder.Ascending ? 'ascending' : 'descending'})
+      {resultColumnHeaders.length === 0 && (
+        <div className="sort-hint" style={{ fontSize: "0.85em", color: "#666", marginTop: "0.5em" }}>
+          Run the pivot once to enable sorting by value columns.
         </div>
       )}
     </div>

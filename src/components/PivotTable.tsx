@@ -1,128 +1,154 @@
-import { PivotResult } from "./types";
+import { useState } from "react";
+import { ColumnFormatConfig, ColumnHeader, PivotResult, RowKind } from "./types";
+import { formatNumber, inferDefaultFormat } from "./formatting";
 
 interface PivotTableProps {
   result: PivotResult | null;
   isLoading: boolean;
+  formatOverrides?: Record<string, ColumnFormatConfig>;
+  onFormatChange?: (key: string, next: ColumnFormatConfig) => void;
 }
 
-export default function PivotTable({ result, isLoading }: PivotTableProps) {
+function formatCell(value: any, header: ColumnHeader, override?: ColumnFormatConfig): string {
+  const config = override ?? inferDefaultFormat(header);
+  return formatNumber(value, config);
+}
+
+function getRowKey(row: Record<string, any>, rowHeaders: string[], idx: number): string {
+  return `${idx}-${rowHeaders.map((h) => String(row[h])).join("|")}`;
+}
+
+export default function PivotTable({
+  result,
+  isLoading,
+  formatOverrides,
+  onFormatChange,
+}: PivotTableProps) {
+  const [menuKey, setMenuKey] = useState<string | null>(null);
+
   if (isLoading) {
     return <div className="loading">Generating pivot table...</div>;
   }
-
   if (!result) {
     return <div className="empty-state">Configure and run a pivot to see results here</div>;
   }
 
-  // // Get unique values for row headers
-  // const rowValues = result.data.map(row => {
-  //   const rowKey: Record<string, any> = {};
-  //   result.row_headers.forEach(header => {
-  //     rowKey[header] = row[header];
-  //   });
-  //   return rowKey;
-  // });
+  const { data, row_meta, column_headers, row_headers, grand_total } = result;
 
-  // Helper to generate a unique key for each row
-  const getRowKey = (row: Record<string, any>) => {
-    return result.row_headers.map(header => String(row[header])).join('-');
-  };
-
-  // Helper to format numbers based on column type
-  const formatValue = (value: any, columnName: string): string => {
-    if (typeof value !== 'number') {
-      return value || '';
+  const headerGroups: { agg_label: string; span: number; key: string }[] = [];
+  let i = 0;
+  while (i < column_headers.length) {
+    const current = column_headers[i].agg_label;
+    let span = 1;
+    while (i + span < column_headers.length && column_headers[i + span].agg_label === current) {
+      span += 1;
     }
+    headerGroups.push({ agg_label: current, span, key: `${current}-${i}` });
+    i += span;
+  }
 
-    // Detect format based on column name patterns
-    const lowerName = columnName.toLowerCase();
-
-    // Percentage format
-    if (lowerName.includes('percent') || lowerName.includes('rate') || lowerName.includes('ratio')) {
-      return `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
-    }
-
-    // Currency format
-    if (lowerName.includes('price') || lowerName.includes('cost') || lowerName.includes('sales') ||
-        lowerName.includes('revenue') || lowerName.includes('amount')) {
-      return value.toLocaleString(undefined, {
-        style: 'currency',
-        currency: 'USD',
-        maximumFractionDigits: 2
-      });
-    }
-
-    // Count format (no decimals)
-    if (lowerName.includes('count') || lowerName.includes('quantity')) {
-      return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
-    }
-
-    // Default number format
-    return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  };
+  const showAggRow = column_headers.some((h) => h.column_values.length > 0);
 
   return (
     <div className="pivot-table-container">
       <table className="pivot-table">
         <thead>
-          {result.column_headers.length > 0 && (
+          {showAggRow && (
             <tr>
-              {/* Empty cell for row headers */}
-              {result.row_headers.length > 0 && (
-                <th colSpan={result.row_headers.length}></th>
-              )}
-              
-              {/* Column headers */}
-              {result.column_headers[0].map((header, index) => (
-                <th key={index}>{header}</th>
+              {row_headers.length > 0 && <th colSpan={row_headers.length}></th>}
+              {headerGroups.map((g) => (
+                <th key={g.key} colSpan={g.span}>
+                  {g.agg_label}
+                </th>
               ))}
             </tr>
           )}
+          <tr>
+            {row_headers.map((h) => (
+              <th key={`rh-${h}`}>{h}</th>
+            ))}
+            {column_headers.map((ch) => {
+              const override = formatOverrides?.[ch.key];
+              const config = override ?? inferDefaultFormat(ch);
+              return (
+                <th
+                  key={ch.key}
+                  title={ch.agg_label}
+                  style={{ position: "relative", cursor: onFormatChange ? "pointer" : undefined }}
+                  onClick={() => onFormatChange && setMenuKey(menuKey === ch.key ? null : ch.key)}
+                >
+                  {ch.column_values.length > 0 ? ch.column_values.join(" / ") : ch.agg_label}
+                  {onFormatChange && (
+                    <span style={{ fontSize: "0.7em", marginLeft: "0.3em", color: "#a0aec0" }}>
+                      ▾
+                    </span>
+                  )}
+                  {menuKey === ch.key && onFormatChange && (
+                    <FormatMenu
+                      config={config}
+                      onApply={(next) => {
+                        onFormatChange(ch.key, next);
+                        setMenuKey(null);
+                      }}
+                      onClose={() => setMenuKey(null)}
+                    />
+                  )}
+                </th>
+              );
+            })}
+          </tr>
         </thead>
         <tbody>
-          {result.data.map((row, _rowIndex) => (
-            <tr key={getRowKey(row)}>
-              {/* Row headers */}
-              {result.row_headers.map(header => (
-                <th key={header}>{row[header]}</th>
-              ))}
-              
-              {/* Data cells */}
-              {result.column_headers[0].map((colHeader, colIndex) => {
-                // Generate the key for this cell based on aggregation
-                const valueKeys = Object.keys(row).filter(key => 
-                  key.includes('_') && !result.row_headers.includes(key)
-                );
-                
-                // Find matching value for this column
-                const matchingKey = valueKeys.find(key => key.endsWith(colHeader));
-                const cellValue = matchingKey ? row[matchingKey] : '';
-                
-                return (
-                  <td key={colIndex}>
-                    {formatValue(cellValue, colHeader)}
+          {data.map((row, rowIdx) => {
+            const meta = row_meta[rowIdx];
+            const isSubtotal = meta?.kind === RowKind.Subtotal;
+            return (
+              <tr
+                key={getRowKey(row, row_headers, rowIdx)}
+                style={
+                  isSubtotal
+                    ? { fontWeight: 600, background: "#f7fafc", borderTop: "1px solid #e2e8f0" }
+                    : undefined
+                }
+              >
+                {row_headers.map((h, hIdx) => {
+                  const value = row[h];
+                  const display =
+                    value === null || value === undefined
+                      ? isSubtotal && hIdx === (meta?.level ?? 0) + 1
+                        ? "Subtotal"
+                        : ""
+                      : String(value);
+                  return (
+                    <th key={h} style={{ paddingLeft: `${0.5 + hIdx * 0.6}em` }}>
+                      {display}
+                    </th>
+                  );
+                })}
+                {column_headers.map((ch) => (
+                  <td key={ch.key}>
+                    {formatCell(row[ch.key], ch, formatOverrides?.[ch.key])}
                   </td>
-                );
-              })}
-            </tr>
-          ))}
+                ))}
+              </tr>
+            );
+          })}
 
-          {/* Grand Total Row */}
-          {result.grand_total && (
-            <tr className="grand-total-row" style={{ fontWeight: 'bold', borderTop: '2px solid #333' }}>
-              {/* Grand total label */}
-              {result.row_headers.map((header, index) => (
-                <th key={header}>
-                  {index === 0 ? (result.grand_total!.__total_label__ || 'Grand Total') : ''}
-                </th>
+          {grand_total && (
+            <tr
+              className="grand-total-row"
+              style={{ fontWeight: "bold", borderTop: "2px solid #333", background: "#edf2f7" }}
+            >
+              {row_headers.map((h, idx) => (
+                <th key={h}>{idx === 0 ? grand_total.__total_label__ ?? "Grand Total" : ""}</th>
               ))}
-
-              {/* Grand total values */}
-              {result.column_headers[0].map((colHeader, colIndex) => {
-                const cellValue = result.grand_total![colHeader];
+              {column_headers.map((ch) => {
+                const v = grand_total[ch.key];
                 return (
-                  <td key={colIndex} style={{ fontWeight: 'bold' }}>
-                    {cellValue !== undefined && cellValue !== null ? formatValue(cellValue, colHeader) : '-'}
+                  <td key={ch.key} style={{ fontWeight: "bold" }}>
+                    {v === undefined || v === null
+                      ? "-"
+                      : formatCell(v, ch, formatOverrides?.[ch.key])}
                   </td>
                 );
               })}
@@ -132,4 +158,80 @@ export default function PivotTable({ result, isLoading }: PivotTableProps) {
       </table>
     </div>
   );
-} 
+}
+
+function FormatMenu({
+  config,
+  onApply,
+  onClose,
+}: {
+  config: ColumnFormatConfig;
+  onApply: (next: ColumnFormatConfig) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState<ColumnFormatConfig>(config);
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        top: "100%",
+        right: 0,
+        zIndex: 10,
+        background: "white",
+        border: "1px solid #cbd5e0",
+        borderRadius: "4px",
+        padding: "0.5em",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+        minWidth: "180px",
+        textAlign: "left",
+        fontWeight: 400,
+        cursor: "auto",
+      }}
+    >
+      <div style={{ fontSize: "0.85em", marginBottom: "0.3em" }}>Format</div>
+      <select
+        value={draft.format}
+        onChange={(e) =>
+          setDraft({ ...draft, format: e.target.value as ColumnFormatConfig["format"] })
+        }
+        style={{ width: "100%", marginBottom: "0.4em" }}
+      >
+        <option value="auto">Auto</option>
+        <option value="number">Number</option>
+        <option value="integer">Integer</option>
+        <option value="currency">Currency</option>
+        <option value="percent">Percent</option>
+      </select>
+      {(draft.format === "number" || draft.format === "currency" || draft.format === "percent") && (
+        <label style={{ display: "block", marginBottom: "0.4em", fontSize: "0.85em" }}>
+          Decimals
+          <input
+            type="number"
+            min={0}
+            max={6}
+            value={draft.decimals ?? 2}
+            onChange={(e) => setDraft({ ...draft, decimals: parseInt(e.target.value, 10) })}
+            style={{ width: "100%" }}
+          />
+        </label>
+      )}
+      {draft.format === "currency" && (
+        <label style={{ display: "block", marginBottom: "0.4em", fontSize: "0.85em" }}>
+          Currency
+          <input
+            type="text"
+            value={draft.currencyCode ?? "USD"}
+            onChange={(e) => setDraft({ ...draft, currencyCode: e.target.value.toUpperCase() })}
+            placeholder="USD"
+            style={{ width: "100%" }}
+          />
+        </label>
+      )}
+      <div style={{ display: "flex", gap: "0.4em", justifyContent: "flex-end" }}>
+        <button onClick={onClose}>Cancel</button>
+        <button onClick={() => onApply(draft)}>Apply</button>
+      </div>
+    </div>
+  );
+}
